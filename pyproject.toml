@@ -1,0 +1,45 @@
+[project]
+name = "agentic-rag"
+version = "1.0.0"
+description = "Agentic RAG: 基于 LangGraph + LlamaIndex 的多 Agent 论文检索与分析系统"
+requires-python = ">=3.12"
+readme = "README.md"
+license = { text = "MIT" }
+authors = [{ name = "Agentic RAG Team" }]
+dependencies = [
+    "ollama>=0.6.0",
+    "llama-index-core>=0.14.0",
+    "llama-index-llms-ollama>=0.10.0",
+    "llama-index-embeddings-ollama>=0.9.0",
+    "llama-index-readers-file>=0.6.0",
+    "llama-index-vector-stores-qdrant>=0.10.0",
+    "qdrant-client>=1.18.0",
+    "langgraph>=1.1.0",
+    "langgraph-checkpoint-sqlite>=3.1.0",
+    "langchain>=1.2.0",
+    "langchain-ollama>=1.1.0",
+    "ddgs>=9.14.0",
+    "fastapi>=0.135.0",
+    "uvicorn>=0.44.0",
+    "pypdf>=6.14.0",
+    "pydantic>=2.12.0",
+    "pydantic-settings>=2.13.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=9.0.0"]
+
+[tool.pytest.ini_options]
+markers = [
+    "smoke: 端到端冒烟测试（需要 Ollama + Qdrant 运行）",
+    "slow: 耗时集成测试",
+]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I"]
+ignore = ["E501"]

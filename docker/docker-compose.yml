@@ -1,0 +1,37 @@
+# Agentic RAG 部署配置
+#
+# 前置条件:
+#   - Ollama 运行在宿主机 (localhost:11434)
+#   - 拉取模型: ollama pull qwen2.5:7b && ollama pull nomic-embed-text
+#
+# 启动: docker compose up -d
+
+services:
+  qdrant:
+    image: qdrant/qdrant:latest
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    restart: unless-stopped
+
+  app:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      - AGENTIC_RAG_QDRANT__URL=http://qdrant:6333
+      - AGENTIC_RAG_LLM__BASE_URL=http://host.docker.internal:11434
+      - AGENTIC_RAG_LLM__MODEL=qwen2.5:7b
+      - AGENTIC_RAG_EMBEDDING__MODEL_NAME=nomic-embed-text
+      - AGENTIC_RAG_EMBEDDING__BASE_URL=http://host.docker.internal:11434
+      - NO_PROXY=qdrant,localhost,127.0.0.1
+    depends_on:
+      - qdrant
+    restart: unless-stopped
+
+volumes:
+  qdrant_data:
