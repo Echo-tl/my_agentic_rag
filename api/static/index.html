@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Agentic RAG · 论文知识库</title>
+<style>
+  :root {
+    --bg: #f2f5fa;
+    --bg-top: #eef2ff;
+    --panel: #ffffff;
+    --border: #e2e8f0;
+    --text: #1e293b;
+    --muted: #64748b;
+    --accent: #4f46e5;
+    --accent2: #7c3aed;
+    --user-bg: linear-gradient(135deg, #4f46e5, #7c3aed);
+    --bubble: #ffffff;
+    --caret: #4f46e5;
+    --shadow: 0 1px 3px rgba(15, 23, 42, .08), 0 1px 2px rgba(15, 23, 42, .04);
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    font-family: -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+    background: linear-gradient(180deg, var(--bg-top) 0%, var(--bg) 240px);
+    color: var(--text);
+    display: flex; flex-direction: column; height: 100vh;
+  }
+  header {
+    padding: 16px 24px;
+    background: rgba(255, 255, 255, 0.85);
+    backdrop-filter: blur(8px);
+    border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; gap: 14px;
+  }
+  .logo {
+    width: 42px; height: 42px; border-radius: 12px;
+    background: var(--user-bg);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 21px; box-shadow: 0 4px 14px rgba(79, 70, 229, .35);
+  }
+  header h1 { margin: 0; font-size: 17px; letter-spacing: .3px; color: #1e293b; }
+  header .sub { font-size: 12px; color: var(--muted); margin-top: 2px; }
+  #chat {
+    flex: 1; overflow-y: auto; padding: 24px;
+    display: flex; flex-direction: column; gap: 18px;
+    scroll-behavior: smooth;
+  }
+  .msg { display: flex; gap: 10px; max-width: 86%; animation: fadeIn .25s ease; }
+  .msg.user { align-self: flex-end; flex-direction: row-reverse; }
+  .avatar {
+    width: 32px; height: 32px; border-radius: 50%; flex-shrink: 0;
+    display: flex; align-items: center; justify-content: center; font-size: 16px;
+    box-shadow: var(--shadow);
+  }
+  .msg.user .avatar { background: var(--user-bg); }
+  .msg.assistant .avatar { background: #e0e7ff; border: 1px solid #c7d2fe; }
+  .bubble {
+    padding: 12px 16px; border-radius: 14px; font-size: 14px; line-height: 1.7;
+    word-break: break-word; min-width: 40px; box-shadow: var(--shadow);
+  }
+  .msg.user .bubble { background: var(--user-bg); color: #fff; border-top-right-radius: 4px; }
+  .msg.assistant .bubble { background: var(--bubble); border: 1px solid var(--border); border-top-left-radius: 4px; }
+  .bubble h1 { font-size: 16px; margin: 8px 0 4px; }
+  .bubble h2 { font-size: 15px; margin: 8px 0 4px; }
+  .bubble h3 { font-size: 14px; margin: 8px 0 4px; color: var(--accent2); }
+  .bubble code { background: #eef2ff; padding: 1px 6px; border-radius: 5px; font-size: 13px; color: #4f46e5; }
+  .bubble p { margin: 6px 0; }
+  .status {
+    align-self: flex-start; display: flex; align-items: center; gap: 8px;
+    font-size: 13px; color: var(--muted); padding: 8px 14px;
+    background: #fff; border: 1px solid var(--border); border-radius: 999px; box-shadow: var(--shadow);
+  }
+  .spinner {
+    width: 13px; height: 13px; border-radius: 50%;
+    border: 2px solid #e2e8f0; border-top-color: var(--accent);
+    animation: spin .8s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @keyframes fadeIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+  .streaming::after {
+    content: '▍'; color: var(--caret); margin-left: 2px; animation: blink .9s step-end infinite;
+  }
+  @keyframes blink { 50% { opacity: 0; } }
+  #input-row {
+    display: flex; gap: 10px; padding: 16px 24px;
+    background: rgba(255, 255, 255, 0.9); backdrop-filter: blur(8px);
+    border-top: 1px solid var(--border);
+  }
+  #q {
+    flex: 1; padding: 12px 16px; border-radius: 12px;
+    border: 1px solid var(--border); background: #fff; color: var(--text);
+    font-size: 14px; outline: none; transition: border-color .2s, box-shadow .2s;
+  }
+  #q:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(79, 70, 229, .12); }
+  #send {
+    padding: 0 26px; border: none; border-radius: 12px;
+    background: var(--user-bg); color: #fff; font-size: 14px; font-weight: 600;
+    cursor: pointer; transition: opacity .2s, transform .1s;
+  }
+  #send:hover { opacity: .92; }
+  #send:active { transform: scale(.97); }
+  #send:disabled { opacity: .45; cursor: not-allowed; }
+  #clear {
+    background: none; border: 1px solid var(--border); color: var(--muted);
+    border-radius: 10px; cursor: pointer; padding: 0 14px; font-size: 13px;
+  }
+  #clear:hover { color: var(--text); border-color: #94a3b8; }
+  .error { color: #dc2626; }
+</style>
+</head>
+<body>
+<header>
+  <div class="logo">📚</div>
+  <div>
+    <h1>Agentic RAG · 论文知识库</h1>
+    <div class="sub">AutoGen · ReAct · Reflexion · AMOR · Voyager ｜ 检索 / 总结 / 对比 / 联网</div>
+  </div>
+</header>
+
+<div id="chat"></div>
+
+<div id="input-row">
+  <input id="q" placeholder="输入问题，例如：AutoGen 和 ReAct 的核心区别是什么？" autocomplete="off" />
+  <button id="clear">清空</button>
+  <button id="send">发送</button>
+</div>
+
+<script>
+const chat = document.getElementById('chat');
+const input = document.getElementById('q');
+const sendBtn = document.getElementById('send');
+let session = null;
+let busy = false;
+let currentAnswer = null;   // 当前回答 bubble 的 content 元素
+let streamedAny = false;
+
+function esc(s) {
+  return s.replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+function renderMarkdown(t) {
+  t = esc(t);
+  t = t.replace(/^### (.+)$/gm, '<h3>$1</h3>');
+  t = t.replace(/^## (.+)$/gm, '<h2>$1</h2>');
+  t = t.replace(/^# (.+)$/gm, '<h1>$1</h1>');
+  t = t.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+  t = t.replace(/`([^`]+)`/g, '<code>$1</code>');
+  t = t.replace(/^\s*[-*] (.+)$/gm, '<p>• $1</p>');
+  t = t.replace(/\n/g, '<br>');
+  return t;
+}
+
+function addMsg(role, text) {
+  const div = document.createElement('div');
+  div.className = 'msg ' + role;
+  div.innerHTML = `<div class="avatar">${role === 'user' ? '🧑‍💻' : '🤖'}</div><div class="bubble"></div>`;
+  const bubble = div.querySelector('.bubble');
+  if (text !== undefined) bubble.innerHTML = renderMarkdown(text);
+  chat.appendChild(div);
+  scrollBottom();
+  return bubble;
+}
+function addStatus(text) {
+  const div = document.createElement('div');
+  div.className = 'status';
+  div.innerHTML = `<span class="spinner"></span><span></span>`;
+  div.querySelector('span:last-child').textContent = text;
+  chat.appendChild(div);
+  scrollBottom();
+  return div;
+}
+function scrollBottom() { chat.scrollTop = chat.scrollHeight; }
+
+function handleEvent(ev, statusEl) {
+  if (ev.type === 'status') {
+    if (statusEl) statusEl.querySelector('span:last-child').textContent = ev.message;
+  } else if (ev.type === 'token') {
+    if (!currentAnswer) {
+      if (statusEl) statusEl.remove();
+      currentAnswer = addMsg('assistant', '');
+      currentAnswer.raw = '';
+    }
+    currentAnswer.raw += ev.token;
+    currentAnswer.innerHTML = renderMarkdown(currentAnswer.raw);  // 整体重渲染，避免 markdown 被拆碎
+    currentAnswer.classList.add('streaming');
+    scrollBottom();
+  } else if (ev.type === 'reset') {
+    // 反思后重答：清空当前答案重新输出
+    if (currentAnswer) { currentAnswer.raw = ''; currentAnswer.innerHTML = ''; }
+    streamedAny = false;
+  } else if (ev.type === 'error') {
+    const b = currentAnswer || addMsg('assistant', '');
+    b.innerHTML = '<span class="error">请求出错：' + esc(ev.message) + '</span>';
+    b.classList.remove('streaming');
+  } else if (ev.type === 'done') {
+    if (statusEl) statusEl.remove();
+    if (currentAnswer) currentAnswer.classList.remove('streaming');
+    // 非流式路径（如澄清）兜底：用 done 携带的完整答案
+    if (!streamedAny && ev.answer) {
+      addMsg('assistant', ev.answer);
+    }
+    session = ev.session_id;
+  }
+}
+
+async function send() {
+  const q = input.value.trim();
+  if (!q || busy) return;
+  addMsg('user', q);
+  input.value = '';
+  busy = true; sendBtn.disabled = true;
+  currentAnswer = null; streamedAny = false;
+  const statusEl = addStatus('正在连接…');
+
+  try {
+    const res = await fetch('/query/stream', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ question: q, session_id: session })
+    });
+    if (!res.ok || !res.body) throw new Error('HTTP ' + res.status);
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = '';
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      let idx;
+      while ((idx = buf.indexOf('\n\n')) >= 0) {
+        const block = buf.slice(0, idx);
+        buf = buf.slice(idx + 2);
+        const line = block.split('\n').find(l => l.startsWith('data: '));
+        if (!line) continue;
+        try {
+          const ev = JSON.parse(line.slice(6));
+          if (ev.type === 'token') streamedAny = true;
+          handleEvent(ev, statusEl);
+        } catch (_) { /* 忽略解析错误 */ }
+      }
+    }
+  } catch (e) {
+    if (statusEl) statusEl.remove();
+    const b = currentAnswer || addMsg('assistant', '');
+    b.innerHTML = '<span class="error">请求失败：' + esc(e.message) + '</span>';
+  } finally {
+    busy = false; sendBtn.disabled = false; input.focus();
+  }
+}
+
+sendBtn.onclick = send;
+input.addEventListener('keydown', e => { if (e.key === 'Enter') send(); });
+document.getElementById('clear').onclick = () => {
+  chat.innerHTML = ''; session = null; currentAnswer = null; streamedAny = false;
+  addMsg('assistant', '会话已清空。有新问题随时问我～');
+};
+
+addMsg('assistant',
+  '你好！我是论文知识库助手，支持检索、总结、跨文献对比和联网搜索。\n\n' +
+  '• "Reflexion 的自我反思机制如何工作？"\n' +
+  '• "AutoGen 和 ReAct 有什么区别？"\n' +
+  '• "总结 Voyager 的核心方法"\n' +
+  '• "最新的大模型 Agent 有什么进展？"');
+</script>
+</body>
+</html>

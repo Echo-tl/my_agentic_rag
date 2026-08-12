@@ -13,11 +13,13 @@ from tools.search.web_search import search_web
 from tools.rag.llamaindex_tool import search_knowledge_base
 from prompts.supervisor import SUPERVISOR_SYSTEM_PROMPT
 from observability.tracing import record_node
+from rag.intent import classify_intent, INTENT_HINTS
 
 # ── Agent State ─────────────────────────────────────────────
 class AgentState(TypedDict):
     messages: Annotated[list[BaseMessage], add_messages]
     reflection_count: int
+    intent: dict  # 意图识别结果（IntentResult 的 dict）
 
 
 # ── Model ───────────────────────────────────────────────────
@@ -40,6 +42,8 @@ atexit.register(_cleanup_chat_ollama)
 
 tools = [search_knowledge_base, search_web]
 model_with_tools = model.bind_tools(tools)
+# 联网搜索意图时只暴露 search_web，避免误用知识库
+model_with_tools_web = model.bind_tools([search_web])
 
 # ── System Prompt（使用 SystemMessage 而非 HumanMessage）─────
 SYSTEM_MESSAGE = SystemMessage(content=SUPERVISOR_SYSTEM_PROMPT)
@@ -109,7 +113,10 @@ def _get_user_question(messages) -> str:
 
 # ── Agent Node ──────────────────────────────────────────────
 def agent_node(state: AgentState) -> dict:
-    """Agent reasoning: call LLM, decide tools or answer."""
+    """Agent reasoning: call LLM, decide tools or answer.
+
+    意图路由后按任务类型限制工具，并注入任务引导提示。
+    """
     record_node("agent")
     messages = state["messages"]
 
@@ -119,7 +126,19 @@ def agent_node(state: AgentState) -> dict:
 
     messages = _inject_current_date(messages)
 
-    response = model_with_tools.invoke(messages)
+    # 按意图路由：web_search 只给联网工具，其余给完整工具
+    task_type = (state.get("intent") or {}).get("task_type")
+    bound_model = model_with_tools_web if task_type == "web_search" else model_with_tools
+
+    # 注入任务引导提示（当轮有效，不改全局系统提示）
+    hint = INTENT_HINTS.get(task_type)
+    if hint:
+        papers = (state.get("intent") or {}).get("papers") or []
+        if papers:
+            hint += f"\n用户可能涉及论文: {', '.join(papers)}"
+        messages = list(messages) + [SystemMessage(content=f"[任务引导] {hint}")]
+
+    response = bound_model.invoke(messages)
     return {"messages": [response]}
 
 
@@ -178,6 +197,37 @@ def reflection_node(state: AgentState) -> dict:
     }
 
 
+# ── Intent Routing（查询理解与工作流路由）──────────────────────
+CLARIFICATION_PROMPT = (
+    "抱歉，你的问题不够明确，我无法判断你想检索、总结还是对比。"
+    "请补充：1) 你想查的主题或目标论文（如 AutoGen、ReAct、Reflexion、AMOR、Voyager）；"
+    "2) 你需要的是文献检索、论文总结，还是多篇论文的对比。"
+    "\n例如：“AutoGen 和 ReAct 的核心区别是什么？”"
+)
+
+
+def intent_node(state: AgentState) -> dict:
+    """查询理解：LLM 结构化输出抽取意图（任务类型 / 论文实体 / 约束 / 置信度）。"""
+    record_node("intent")
+    query = _get_user_question(state["messages"])
+    result = classify_intent(query)
+    return {"intent": result.model_dump()}
+
+
+def clarification_node(state: AgentState) -> dict:
+    """低置信度 / 未支持意图：请求澄清，结束本轮回合。"""
+    record_node("clarification")
+    return {"messages": [AIMessage(content=CLARIFICATION_PROMPT)]}
+
+
+def route_after_intent(state: AgentState) -> Literal["agent", "clarification"]:
+    """按意图条件路由：澄清意图走澄清节点，其余进入 Agent 工作流。"""
+    intent = state.get("intent") or {}
+    if intent.get("task_type") == "clarification":
+        return "clarification"
+    return "agent"
+
+
 # ── Routing ─────────────────────────────────────────────────
 def route_after_agent(state: AgentState) -> Literal["tools", "reflection", "__end__"]:
     messages = state["messages"]
@@ -210,8 +260,20 @@ workflow = StateGraph(AgentState)
 workflow.add_node("agent", agent_node)
 workflow.add_node("tools", tools_node)
 workflow.add_node("reflection", reflection_node)
+workflow.add_node("intent", intent_node)
+workflow.add_node("clarification", clarification_node)
 
-workflow.set_entry_point("agent")
+if config.retrieval.enable_intent_routing:
+    # 意图识别 → 按任务类型条件路由；澄清意图直接结束
+    workflow.set_entry_point("intent")
+    workflow.add_conditional_edges("intent", route_after_intent, {
+        "agent": "agent",
+        "clarification": "clarification",
+    })
+    workflow.add_edge("clarification", END)
+else:
+    workflow.set_entry_point("agent")
+
 workflow.add_conditional_edges("agent", route_after_agent, {
     "tools": "tools", "reflection": "reflection", "__end__": END,
 })

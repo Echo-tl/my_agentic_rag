@@ -78,6 +78,7 @@ class RetrievalConfig(BaseSettings):
     enable_document_grading: bool = False  # 文档评分与 reranker 功能重叠，且 qwen2.5 下评分过严会清空结果，故默认关闭
     enable_reflection: bool = True     # 是否启用回答反思
     max_reflection_retries: int = 1    # 反思最大重试次数
+    enable_intent_routing: bool = True  # 是否启用意图识别与工作流路由（IntentRouter）
 
 
 class MemoryConfig(BaseSettings):

@@ -16,7 +16,11 @@ build/
 data/
 storage/
 checkpoints.db
+checkpoints.db-shm
+checkpoints.db-wal
 *.db
+*.db-shm
+*.db-wal
 
 # ── 编辑器 / 系统 ──────────────────────────────────────────────
 .idea/

@@ -79,7 +79,9 @@ _traces: list[dict] = []
 _traces_lock = threading.Lock()
 
 
-# ── 当前 trace 上下文（contextvars，跨同步调用传播，支持并发请求）──
+# ── 当前 trace 上下文（contextvars，跨同步调用/线程传播，支持并发请求）──
+# 必须用 contextvars 而非 thread-local：LangGraph 用 asyncio.to_thread 在子线程跑工具，
+# contextvars 会随 copy_context 传播到子线程，thread-local 则不会，会导致工具调用记录丢失。
 _current_trace: ContextVar[Optional[ExecutionTrace]] = ContextVar("current_trace", default=None)
 
 
@@ -108,7 +110,13 @@ def trace_query(query: str):
             trace.error = str(e)
             raise
         finally:
-            _current_trace.reset(token)
+            try:
+                _current_trace.reset(token)
+            except ValueError:
+                # 流式端点：Starlette/uvicorn 对同步生成器的每个 next() 用 copy_context()
+                # 单独迭代，set() 与 reset() 落在不同 Context 会抛 "Token was created in a
+                # different Context"。临时上下文随即被回收，无状态泄漏，忽略即可。
+                pass
             trace.finish()
 
     return _manager()

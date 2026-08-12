@@ -23,6 +23,14 @@ def load_queries() -> list[dict]:
     return data["queries"]
 
 
+def _expected_papers_in_top_k(nodes: list, expected_papers: list[str]) -> bool:
+    """判断 top-K 结果中是否出现全部预期论文（按 file_name 匹配）。"""
+    files = {n.node.metadata.get("file_name", "") for n in nodes}
+    return all(
+        any(p.lower() in f.lower() for f in files) for p in expected_papers
+    )
+
+
 def evaluate_retrieval(top_k: int = 10, limit: Optional[int] = None) -> dict:
     """评估检索质量。
 
@@ -31,7 +39,7 @@ def evaluate_retrieval(top_k: int = 10, limit: Optional[int] = None) -> dict:
         limit: 只评估前 N 条查询（None = 全部）
 
     Returns:
-        {Recall@K, MRR, Hit Rate, queries_tested, top_k}
+        {Recall@K, MRR, Hit Rate, Paper Hit Rate, queries_tested, top_k}
     """
     index = get_index(config.paths.data_dir, get_vector_store(), create_embedding(config.embedding))
     retriever = index.as_retriever(similarity_top_k=top_k)
@@ -42,6 +50,7 @@ def evaluate_retrieval(top_k: int = 10, limit: Optional[int] = None) -> dict:
     total_recall = 0.0
     total_mrr = 0.0
     hits = 0
+    paper_hits = 0
 
     for item in queries:
         query = item["query"]
@@ -67,11 +76,15 @@ def evaluate_retrieval(top_k: int = 10, limit: Optional[int] = None) -> dict:
             total_mrr += 1.0 / first_rank
             hits += 1
 
+        if _expected_papers_in_top_k(nodes, item["expected_papers"]):
+            paper_hits += 1
+
     n = len(queries)
     return {
         "Recall@{}".format(top_k): round(total_recall / n, 3),
         "MRR": round(total_mrr / n, 3),
         "Hit Rate": round(hits / n, 3),
+        "Paper Hit Rate": round(paper_hits / n, 3),
         "queries_tested": n,
         "top_k": top_k,
     }
@@ -82,6 +95,7 @@ if __name__ == "__main__":
     print(f"RAG 检索评估 — {len(load_queries())} 条评测集")
     print("=" * 55)
     for k in [5, 10, 20]:
-        result = evaluate_retrieval(k, limit=30)  # 默认跑 30 条避免太慢
-        print(f"top_k={k:>2}: Recall={result['Recall@{}'.format(k)]:.3f}  "
-              f"MRR={result['MRR']:.3f}  Hit={result['Hit Rate']:.3f}")
+        result = evaluate_retrieval(k)  # 跑全部评测集
+        print(f"top_k={k:>2}: Recall@{k}={result['Recall@{}'.format(k)]:.3f}  "
+              f"MRR={result['MRR']:.3f}  Hit={result['Hit Rate']:.3f}  "
+              f"PaperHit={result['Paper Hit Rate']:.3f}")
