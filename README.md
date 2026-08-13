@@ -1,5 +1,7 @@
 # Agentic RAG — 多 Agent 论文检索与分析系统
 
+![Agentic RAG 演示](assets/hero.gif)
+
 基于 **LangGraph + LlamaIndex + Qdrant + Ollama** 的 Agentic RAG 系统，面向本地论文知识库，支持语义检索、意图路由、跨文献对比、多 Agent 协作、流式回答、对话记忆与执行追踪。
 
 ## 核心特性
