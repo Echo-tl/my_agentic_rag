@@ -71,10 +71,17 @@ class TestClassifyIntent:
 
 class TestRouting:
     def test_route_after_intent(self):
+        """非澄清意图先过 memory（摘要+裁剪），澄清意图直接结束。"""
         from workflows.graph import route_after_intent
         assert route_after_intent({"intent": {"task_type": "clarification"}}) == "clarification"
-        assert route_after_intent({"intent": {"task_type": "paper_summary"}}) == "agent"
-        assert route_after_intent({"intent": {}}) == "agent"
+        assert route_after_intent({"intent": {"task_type": "paper_summary"}}) == "memory"
+        assert route_after_intent({"intent": {}}) == "memory"
+
+    def test_graph_has_memory_node_before_agent(self):
+        """memory 必须真的挂在图上——挂漏了裁剪功能会静默失效。"""
+        from workflows.graph import workflow
+        assert "memory" in workflow.nodes
+        assert ("memory", "agent") in workflow.edges
 
     def test_graph_compiles_with_intent_routing(self):
         from workflows.graph import agent

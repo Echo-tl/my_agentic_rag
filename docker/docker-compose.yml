@@ -4,7 +4,7 @@
 #   - Ollama 运行在宿主机 (localhost:11434)
 #   - 拉取模型: ollama pull qwen2.5:7b && ollama pull nomic-embed-text
 #
-# 启动: docker compose up -d
+# 启动: docker compose -f docker/docker-compose.yml up -d --build
 
 services:
   qdrant:
@@ -14,6 +14,46 @@ services:
       - "6334:6334"
     volumes:
       - qdrant_data:/qdrant/storage
+    restart: unless-stopped
+
+  redis:
+    # 必须 8.x：LangGraph 的 RedisSaver 依赖 RedisJSON + RediSearch，
+    # redis:7 会在 saver.setup() 时报 "unknown command 'JSON.SET'"。
+    # Redis 8.0 起这两个模块内置于所有官方二进制发行版。
+    image: redis:8
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  mysql:
+    image: mysql:8.4
+    environment:
+      MYSQL_ROOT_PASSWORD: agentic
+      MYSQL_DATABASE: agentic_rag
+      MYSQL_USER: agentic
+      MYSQL_PASSWORD: agentic
+    command:
+      - "--character-set-server=utf8mb4"
+      - "--collation-server=utf8mb4_unicode_ci"
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-u", "root", "-pagentic"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      # MySQL 首次初始化数据目录要几十秒，没有 start_period 会被误判为启动失败
+      start_period: 40s
     restart: unless-stopped
 
   app:
@@ -28,10 +68,21 @@ services:
       - AGENTIC_RAG_LLM__MODEL=qwen2.5:7b
       - AGENTIC_RAG_EMBEDDING__MODEL_NAME=nomic-embed-text
       - AGENTIC_RAG_EMBEDDING__BASE_URL=http://host.docker.internal:11434
-      - NO_PROXY=qdrant,localhost,127.0.0.1
+      - AGENTIC_RAG_REDIS__ENABLED=true
+      - AGENTIC_RAG_REDIS__URL=redis://redis:6379/0
+      - AGENTIC_RAG_MYSQL__ENABLED=true
+      - AGENTIC_RAG_MYSQL__URL=mysql+pymysql://agentic:agentic@mysql:3306/agentic_rag?charset=utf8mb4
+      - NO_PROXY=qdrant,redis,mysql,localhost,127.0.0.1
     depends_on:
-      - qdrant
+      qdrant:
+        condition: service_started
+      redis:
+        condition: service_healthy
+      mysql:
+        condition: service_healthy
     restart: unless-stopped
 
 volumes:
   qdrant_data:
+  redis_data:
+  mysql_data:

@@ -7,10 +7,9 @@
 """
 
 import hashlib
-import json
 import logging
 from pathlib import Path
-from typing import Dict, List, Set
+from typing import Dict, Set
 
 from llama_index.core import VectorStoreIndex
 from llama_index.core import StorageContext, load_index_from_storage
@@ -37,21 +36,21 @@ def _hash_file(path: Path) -> str:
 
 
 def _load_hash_record() -> Dict[str, str]:
-    """{file_name: md5}：已索引文件的哈希记录。"""
-    p = config.paths.persist_dir / _HASH_FILE
-    if p.exists():
-        try:
-            return json.loads(p.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
-            return {}
-    return {}
+    """{file_name: md5}：已索引文件的哈希记录。
+
+    委托给 doc_registry：本地 JSON 仍是**判定真源**（摄取决策必须同步且确定），
+    MySQL 的 documents 表是有记录时的查询副本、无本地文件时的兜底来源。
+    """
+    from persistence.doc_registry import load_hash_record
+
+    return load_hash_record()
 
 
 def _save_hash_record(record: Dict[str, str]):
-    config.paths.persist_dir.mkdir(parents=True, exist_ok=True)
-    (config.paths.persist_dir / _HASH_FILE).write_text(
-        json.dumps(record, indent=2, ensure_ascii=False), encoding="utf-8"
-    )
+    """同步写本地 JSON（原子替换），后台镜像进 MySQL documents 表。"""
+    from persistence.doc_registry import save_hash_record
+
+    save_hash_record(record)
 
 
 def _scan_data_files(data_dir: Path) -> Dict[str, Path]:
@@ -150,6 +149,8 @@ def incremental_ingest(index: VectorStoreIndex, data_dir: Path, embed_model) -> 
             logger.info(f"[incremental] 初始化哈希记录：{len(files)} 个文件视为已索引（未重复 embedding）")
         record = {name: _hash_file(path) for name, path in files.items()}
         _save_hash_record(record)
+        # 老版本升级时 Qdrant 里已有分块 → 同样要失效可能存在的旧缓存
+        _notify_kb_changed([], [], qdrant_names - set(files), files)
         return index
 
     new_files = [n for n in files if n not in record]
@@ -157,6 +158,15 @@ def incremental_ingest(index: VectorStoreIndex, data_dir: Path, embed_model) -> 
     removed_files = [n for n in record if n not in files]
 
     if not (new_files or changed_files or removed_files):
+        # 无变更也要把本地记录镜像一次 MySQL：老部署首次启用 MySQL 时
+        # documents 表还是空的，而这里正是唯一的「启动但没动过文件」路径。
+        # 后台队列投递，不阻塞也不影响摄取判定。
+        try:
+            from persistence.doc_registry import mirror_hash_record
+
+            mirror_hash_record(record)
+        except Exception:
+            pass
         return index
 
     from rag.ingestion import run_ingestion
@@ -184,7 +194,22 @@ def incremental_ingest(index: VectorStoreIndex, data_dir: Path, embed_model) -> 
         record[n] = _hash_file(files[n])
     _save_hash_record(record)
 
+    # 4) 知识库变了 → 让热点问答缓存整体失效。
+    #    必须放在最后：中途 bump 会让摄取失败留下的半成品状态也"看起来是新版本"。
+    _notify_kb_changed(new_files, changed_files, removed_files, files)
+
     return index
+
+
+def _notify_kb_changed(added, changed, removed, files=None):
+    """摄取后失效问答缓存。Redis 不可用时内部 no-op，不影响摄取。"""
+    try:
+        from persistence.doc_registry import notify_kb_changed
+
+        notify_kb_changed(added=added, changed=changed, removed=removed,
+                          total=len(files or {}))
+    except Exception as e:  # 缓存失效失败绝不能影响摄取结果
+        logger.debug(f"[incremental] kb_version 自增失败（缓存靠 TTL 过期）: {e}")
 
 
 def get_index(data_dir, vector_store, embed_model) -> VectorStoreIndex:
@@ -197,5 +222,7 @@ def get_index(data_dir, vector_store, embed_model) -> VectorStoreIndex:
         nodes = run_ingestion(data_dir, embed_model)
         index = build_index(nodes, vector_store, embed_model)
         # 首次构建：把当前所有文件记入哈希记录
-        _save_hash_record({name: _hash_file(path) for name, path in _scan_data_files(data_dir).items()})
+        all_files = _scan_data_files(data_dir)
+        _save_hash_record({name: _hash_file(path) for name, path in all_files.items()})
+        _notify_kb_changed(list(all_files.keys()), [], [], all_files)
         return index

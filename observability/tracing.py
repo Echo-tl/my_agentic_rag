@@ -10,6 +10,7 @@ trace_query 退出时自动 finish() 并写回 _traces，可用 get_recent_trace
 """
 
 import time
+import uuid
 import logging
 import threading
 from contextvars import ContextVar
@@ -27,12 +28,17 @@ class ExecutionTrace:
     """单次查询的执行追踪记录。"""
 
     def __init__(self, query: str):
+        # trace_id 用于把内存 trace、execution_traces 与 qa_records 三者串起来
+        self.trace_id = uuid.uuid4().hex[:16]
         self.query = query
         self.start_time = time.time()
         self.tool_calls: list[dict] = []
         self.node_transitions: list[str] = []
         self._last_node: Optional[str] = None
         self.error: Optional[str] = None
+        # 由调用方（API 层）回填，供落库时关联会话
+        self.session_id: Optional[str] = None
+        self.qa_id: Optional[int] = None
 
     def add_tool_call(self, tool_name: str, args: dict, duration_ms: float):
         self.tool_calls.append({"tool": tool_name, "args": args, "duration_ms": round(duration_ms, 1)})
@@ -53,6 +59,8 @@ class ExecutionTrace:
     def finish(self):
         elapsed = time.time() - self.start_time
         result = {
+            "trace_id": self.trace_id,
+            "session_id": self.session_id,
             "query": self.query,
             "elapsed_s": round(elapsed, 1),
             "tool_calls": self.tool_calls,
@@ -71,12 +79,38 @@ class ExecutionTrace:
             f"Trace complete: query='{self.query[:50]}...' elapsed={elapsed:.1f}s "
             f"tool_calls={len(self.tool_calls)} path={' → '.join(path_nodes)}"
         )
+        _persist(result)
         return result
 
 
 # 全局追踪存储（写访问由锁保护）
 _traces: list[dict] = []
 _traces_lock = threading.Lock()
+
+
+def _persist(result: dict):
+    """把 trace 归档进 MySQL（可选增强，MySQL 未启用时是 no-op）。
+
+    只做 `put_nowait` 投递，**不在请求路径上做任何 IO**——finish() 会在 SSE 生成器
+    的 finally 里执行，那里阻塞会直接卡住用户端的最后一帧。
+    """
+    try:
+        from persistence.repo import submit_trace
+
+        submit_trace({
+            "trace_id": result.get("trace_id"),
+            "session_id": result.get("session_id"),
+            "qa_id": result.get("qa_id"),
+            "query": result.get("query") or "",
+            # 库里存毫秒（int），前端展示的 elapsed_s 保持秒
+            "elapsed_ms": int((result.get("elapsed_s") or 0) * 1000),
+            "tool_calls": result.get("tool_calls") or [],
+            "node_path": result.get("path") or [],
+            "tool_count": len(result.get("tool_calls") or []),
+            "error": result.get("error"),
+        })
+    except Exception:
+        pass
 
 
 # ── 当前 trace 上下文（contextvars，跨同步调用/线程传播，支持并发请求）──

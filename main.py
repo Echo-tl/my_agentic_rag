@@ -13,9 +13,13 @@ SESSION_ID = str(uuid.uuid4())[:8]
 
 def ask(question: str) -> str:
     """单次查询。Memory 会自动记住上下文。每次查询都会写入一条 execution trace。"""
-    with trace_query(question):
+    # current_question 必须显式传：memory_node 会裁剪历史，
+    # 裁掉之后就没法靠"扫第一条用户消息"找回本轮问题了
+    with trace_query(question) as tr:
+        tr.session_id = SESSION_ID
         result = agent.invoke(
-            {"messages": [("user", question)], "reflection_count": 0},
+            {"messages": [("user", question)], "reflection_count": 0,
+             "intent": {}, "current_question": question},
             config={"configurable": {"thread_id": SESSION_ID}},
         )
     for msg in reversed(result["messages"]):

@@ -96,6 +96,72 @@ class MemoryConfig(BaseSettings):
         return self
 
 
+class RedisConfig(BaseSettings):
+    """Redis 配置：Session、短期摘要、热点问答缓存、知识库版本号。
+
+    默认关闭。未启用或连不上时全链路静默降级为 no-op，主流程不受影响。
+    """
+
+    enabled: bool = False                # 默认关：不配环境变量时行为与引入前完全一致
+    url: str = "redis://localhost:6379/0"
+    key_prefix: str = "agr"              # 所有 key 的统一前缀，便于多环境隔离与批量清理
+    max_connections: int = 20
+    socket_timeout: float = 0.5          # 单命令超时，必须短——它决定降级路径的最坏耗时
+    socket_connect_timeout: float = 0.5
+    health_check_interval: int = 30
+    strict: bool = False                 # True=连不上直接抛错（CI / 就绪探针用）
+
+    # ── Session ──
+    session_ttl: int = 1800              # 滑动过期（每次访问刷新）
+    window_size: int = 10                # 保留最近 N 条消息
+
+    # ── 短期摘要 ──
+    summary_enabled: bool = True
+    summary_trigger: int = 12            # 消息数达到此值触发滚动摘要
+    summary_keep_recent: int = 6         # 摘要后保留最近 N 条不压缩
+    summary_max_chars: int = 2000        # 摘要长度上限
+    summary_ttl: int = 86400             # 比 session 长，防会话中断后重连丢摘要
+
+    # ── 热点问答缓存 ──
+    cache_enabled: bool = True
+    cache_ttl: int = 3600                # 固定 TTL，不滑动——防长尾脏数据
+    cache_min_hits: int = 2              # 观察到 >= N 次才写缓存（热点门槛）；设 1 = 立即缓存
+    cache_max_question_chars: int = 200  # 超长问题不缓存（复用率低）
+    cache_min_answer_chars: int = 20     # 过短答案不缓存
+    cache_fp_ctx_turns: int = 2          # 上下文指纹取最近几轮用户问题
+    cache_lock_ttl_ms: int = 30000       # single-flight 锁
+
+    # ── Checkpoint ──
+    # redis=官方 RedisSaver（需 RedisJSON+RediSearch，即 redis:8 或 redis-stack）；
+    # sqlite=沿用现有 SqliteSaver；none=不持久化
+    checkpoint_backend: Literal["redis", "sqlite", "none"] = "redis"
+    checkpoint_ttl: int = 1440           # 分钟
+
+
+class MySQLConfig(BaseSettings):
+    """MySQL 配置：用户 / 会话 / 问答记录 / 文档元数据 / 执行追踪的持久化。
+
+    默认关闭。连不上时全部写入静默丢弃并计数告警，主流程不受影响。
+    """
+
+    enabled: bool = False
+    # charset=utf8mb4 必须显式写，否则中文入库变乱码
+    url: str = "mysql+pymysql://agentic:agentic@localhost:3306/agentic_rag?charset=utf8mb4"
+    pool_size: int = 5
+    max_overflow: int = 10
+    pool_recycle: int = 1800             # 防 MySQL 默认 8h 空闲断连
+    pool_pre_ping: bool = True
+    connect_timeout: float = 1.0
+    echo: bool = False
+    auto_create: bool = True             # 启动时 create_all；接 Alembic 后置 false
+    strict: bool = False
+
+    # ── 后台写入队列（不阻塞请求/SSE）──
+    write_queue_size: int = 1000
+    write_batch_size: int = 20
+    drop_on_overflow: bool = True        # 队列满时丢弃，绝不阻塞请求
+
+
 class PathConfig(BaseSettings):
     """路径配置。"""
 
@@ -125,6 +191,9 @@ class Settings(BaseSettings):
         env_prefix="AGENTIC_RAG_",
         env_nested_delimiter="__",  # 环境变量：AGENTIC_RAG_LLM__MODEL=qwen2.5:14b
         case_sensitive=False,
+        env_file=".env",            # 让 .env.example 承诺的用法真正生效
+        env_file_encoding="utf-8",
+        extra="ignore",
     )
 
     llm: LLMConfig = Field(default_factory=LLMConfig)
@@ -134,6 +203,9 @@ class Settings(BaseSettings):
     retrieval: RetrievalConfig = Field(default_factory=RetrievalConfig)
     memory: MemoryConfig = Field(default_factory=MemoryConfig)
     paths: PathConfig = Field(default_factory=PathConfig)
+    # 存储扩展层（默认关闭，见各类的 enabled 字段）
+    redis: RedisConfig = Field(default_factory=RedisConfig)
+    mysql: MySQLConfig = Field(default_factory=MySQLConfig)
 
 
 # ============================================================
