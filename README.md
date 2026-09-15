@@ -208,21 +208,6 @@ python main.py "LLM Agent相关的论文有哪些"
 
 交互模式命令：`/new` 新会话、`/exit` 退出。
 
-## 评测结果
-
-基于 `evaluation/datasets/test_queries.json`（55 条自建评测集，覆盖 5 篇论文、中英混合、含对比与长尾问题）：
-
-```powershell
-python -m evaluation.rag_eval
-```
-
-| 指标 | top-5 | top-10 | top-20 |
-|------|-------|--------|--------|
-| **论文级命中率** | **94.5%** | **96.4%** | 96.4% |
-| 检索命中率 (Hit Rate) | 85.5% | 89.1% | 92.7% |
-| Recall | 64.1% | 70.8% | 74.4% |
-| MRR | 0.638 | 0.608 | 0.586 |
-
 ## 运行测试
 
 ```powershell
